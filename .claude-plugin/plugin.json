@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "annie-skills",
+  "description": "Anyshift-specific skills for AI agents: how to drive the Annie CLI and the Anyshift MCP server (read-only infra investigation: resource graph, recent changes, dependents, blast radius, temporal diffs).",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/anyshift-io/annie-skills",
+  "repository": "https://github.com/anyshift-io/annie-skills",
+  "keywords": [
+    "annie",
+    "anyshift",
+    "sre",
+    "mcp",
+    "ai-agents",
+    "site-reliability-engineering"
+  ],
+  "author": {
+    "name": "Anyshift",
+    "email": "hello@anyshift.io"
+  }
+}
