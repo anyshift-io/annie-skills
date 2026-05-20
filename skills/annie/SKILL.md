@@ -1,189 +1,189 @@
 ---
 name: annie
-description: Use the Annie CLI and the Anyshift MCP server to investigate infrastructure: resource graph, recent changes, dependents, blast radius, and temporal diffs. Use when the user asks about a resource, a deploy, an impact analysis, or wants to compare infra state across time. Keywords: annie, anyshift, mcp, infrastructure, blast radius, dependents, deploy impact, resource graph, terraform drift, temporal diff.
+description: Use the Anyshift MCP server (and the Annie CLI as the user-facing chat client) to investigate infrastructure: discover resource types, search the graph, track changes, audit a single resource's timeline, and inspect resources in detail. Use when the user asks about a resource, a deploy, an impact analysis, or wants to compare infra state across time. Keywords: annie, anyshift, mcp, infrastructure, resource graph, change tracking, audit timeline, temporal diff.
 allowed-tools: Bash, Read, Grep
 ---
 
 # Annie Skill
 
-Teach an AI agent how to drive **Annie CLI** and the **Anyshift MCP server** to investigate infrastructure state, recent changes, and blast radius. This skill is the foundation that every other `annie-skills` skill builds on.
+Teach an AI agent how to drive the **Anyshift MCP server** to investigate infrastructure state, recent changes, and resource relationships, and how to point a human user at the **Annie CLI** when they want to ask Annie questions themselves.
+
+## Mental model
+
+There are two surfaces in this ecosystem, and they are not the same:
+
+1. **Anyshift MCP server.** A read-mostly MCP server that exposes the Anyshift infrastructure graph (resources, relationships, change history) to any MCP-capable agent harness (Claude Code, Cursor, Cline, etc.). This is the surface the agent calls directly. Tool names are `snake_case`.
+2. **Annie CLI (`annie`).** A user-facing terminal chat client. Running `annie` with no arguments launches an interactive TUI; `annie ask "..."` is the one-shot variant. The CLI is for humans talking to Annie, not for agents tunnelling MCP tool calls.
+
+**The CLI does not expose an `annie mcp call` interface.** Agents invoke MCP tools through the agent harness's MCP transport, not through the CLI.
 
 ## What this skill does
 
-1. **Installs and authenticates** the Annie CLI on the local host.
-2. **Connects** to the Anyshift MCP server over the configured transport (stdio or HTTP).
-3. **Calls the 5 read-only MCP tools** in the right order for a given question:
-   - `get_resource_graph` (snapshot of resources and their relationships)
-   - `get_recent_changes` (deploys, Terraform applies, IAM updates in a window)
-   - `get_dependents` (what depends on a given resource)
-   - `get_blast_radius` (downstream impact of a change or outage)
-   - `get_temporal_diff` (state of infra at point A vs point B)
-4. **Falls back gracefully** when Annie isn't reachable, when auth fails, or when the graph is stale.
+1. Helps the agent **pick the right MCP tool** for the question.
+2. Shows the agent how the MCP server is **configured** in a Claude Code / Cursor / Cline harness.
+3. Tells the human user where the **Annie CLI** fits and how to install / auth it.
+4. **Falls back gracefully** when the MCP server isn't reachable, when auth fails, or when the graph is stale.
 
 ## When to use this skill
 
-Invoke this skill when the user asks anything that maps to *"what does our infra look like right now?"* or *"what changed?"* or *"what would break if I touch X?"*. Concrete triggers:
+Invoke this skill when the user asks anything that maps to _"what does our infra look like right now?"_ or _"what changed?"_ or _"who/what touches X?"_. Concrete triggers:
 
-- "What does deploy `abc123` touch?"
-- "Who owns this S3 bucket?"
-- "What depends on the `payments-api` service?"
-- "What's the blast radius of taking down the `prod-db` RDS instance?"
 - "What changed in our AWS account between yesterday at 9am and now?"
-- "Is the Terraform state for `vpc-foo` drifted?"
+- "What does this deploy touch?"
+- "Who owns this S3 bucket? What is it connected to?"
+- "Walk me through the history of `vpc-foo`."
+- "Pull the current details on these three resources at once."
 
-Skip this skill when the question is about **methodology** (how to run an oncall handover, how to write a postmortem). For those, use `anyshift-io/sre-skills`.
+Skip this skill when the question is about **methodology** (how to run an oncall handover, how to write a postmortem). For those, use the `sre-skills` plugin.
 
 ## Prerequisites
 
-Two things must be set up before the skill runs:
+The MCP server is hosted by Anyshift at a public HTTPS endpoint. Clients do not run their own copy. See [`reference.md`](./reference.md) for the transport config. The skill assumes:
 
-1. **Annie CLI installed.** See [`reference.md`](./reference.md) for the install snippet.
-2. **Anyshift MCP endpoint configured.** Either as a stdio MCP server (Annie CLI subprocess) or as a remote HTTP MCP endpoint with an API key. See [`reference.md`](./reference.md).
+- An MCP server registered (as `anyshift` or equivalent) in the agent harness config, pointing at the hosted endpoint.
+- A valid bearer token for the hosted endpoint.
 
-Run the preflight check at the start of every session:
+If the user also wants to ask Annie questions themselves (not through the agent), install the Annie CLI (`annie --version`, then `annie auth login`).
 
-```bash
-annie auth status
-annie mcp ping
+## The 5 public MCP tools
+
+The agent has five read tools by default. Pick the smallest tool that answers the question, not the biggest. The MCP server itself instructs callers to start with `catalog_resource_types` whenever the resource-type label is unclear, because it returns the exact labels used elsewhere.
+
+### `catalog_resource_types`
+
+Discovery starting point. Returns every resource type the graph knows about. Use first when you don't know what to filter by, or when the user's noun ("the EC2 things", "the buckets") needs to be mapped to a canonical type label.
+
+### `search_resources_by_term`
+
+Flexible search across resources by name, property, or type, at any timestamp. Returns matched resources with their properties and relationship context (inbound + outbound by default). Supports filtering by `universe` (`TF`, `CLOUD`, `STATE`, `DATADOG`) and `resourceType`. Paginated.
+
+```
+search_resources_by_term({ search_term: "prod-vpc" })
+search_resources_by_term({ resourceType: "S3_BUCKET" })
+search_resources_by_term({ search_term: "database", timestamp: "2026-05-18T10:00:00.000Z" })
+search_resources_by_term({ universe: "CLOUD", search_term: "web" })
 ```
 
-If either fails, jump to the failure-modes section below before doing anything else.
+This is also how you reach "what is X connected to?". Relationships ride along with each match unless `excludeInboundRelationships: true` is set.
+
+### `track_infrastructure_changes`
+
+Lists graph nodes modified between two timestamps. Use when the user asks "what changed in this window?". Returns an ordered change set with the affected resources.
+
+```
+track_infrastructure_changes({ start: "2026-05-19T08:00:00Z", end: "now" })
+```
+
+### `audit_resource_timeline`
+
+Comprehensive change history for one specific resource by its `hashed_id`, over a timespan. Use when the user wants the lifecycle of a single resource (e.g. "what's happened to `vpc_prod_main` this week?"), not "what changed across the estate".
+
+```
+audit_resource_timeline({ hashed_id: "<from a prior search>", start: "...", end: "..." })
+```
+
+### `inspect_resource_details`
+
+Batch fetch full details (properties + relationships) for one or more resources at a given timestamp. Use after `search_resources_by_term` when you have a short list of `hashed_id`s and want the complete picture in one call.
+
+```
+inspect_resource_details({ hashed_ids: ["id1", "id2", "id3"], timestamp: "now" })
+```
+
+## What is NOT a tool
+
+Things the previous version of this skill claimed existed and do not:
+
+- There is no `get_blast_radius` primitive. Impact analysis is assembled from the relationship graph: start with `search_resources_by_term` on the candidate resource, follow its outbound relationships, then `inspect_resource_details` on the dependents. Report the chain, not a "blast radius score": the server doesn't compute one.
+- There is no `get_dependents` primitive. Dependents are derivable from the relationship payload that `search_resources_by_term` and `inspect_resource_details` already return.
+- There is no `get_temporal_diff` primitive. The diff shape "added / removed / modified between A and B" is best assembled from `track_infrastructure_changes` over the window, optionally narrowed with `audit_resource_timeline` per resource.
+- There is no public write tool. Internal write tools exist (cheatsheet editing, report saving, ACE flows) but they run only on Anyshift-internal deployments and are out of scope for this skill. If a tool call surfaces an unexpected write tool, do not call it (see "Failure modes" below).
+
+## Optional: MCP-proxy helper tools
+
+When the agent connects through the hosted MCP endpoint, an `mcp-proxy` may sit in front of the server and expose a handful of investigation helpers:
+
+- `execute_jq_query`: run a `jq` filter against a JSON blob (handy for slicing tool output).
+- `docs_glob` / `docs_grep` / `docs_read`: search and read documentation surfaces.
+- `detect_timeseries_anomalies`: anomaly detection against a timeseries.
+
+These do not always appear (the proxy is optional). Check `tools/list` in the harness to see what's actually exposed in the current session.
 
 ## How to call the tools
 
-The 5 read-only tools cover one question shape each. Pick the smallest tool that answers the question, not the biggest.
+Through the MCP transport in the agent harness. Tool names are `snake_case` and match this document exactly. Arguments are JSON-shaped, matching each tool's input schema (the harness will surface the schema; if you need it explicitly, ask the MCP server's `tools/list`).
 
-### `get_resource_graph`
-
-Snapshot of the resource graph. Use to find a resource, see its type, see what it's connected to.
-
-```
-get_resource_graph(filter: {name: "payments-api"})
-get_resource_graph(filter: {type: "aws_rds_instance", env: "prod"})
-```
-
-Returns: nodes (resources) and edges (relationships: depends-on, owned-by, deployed-by).
-
-### `get_recent_changes`
-
-Changes (deploys, Terraform applies, IAM mutations, manual console actions) in a time window. Use when the user asks "what changed?" or correlates an incident to a deploy.
-
-```
-get_recent_changes(since: "2026-05-19T08:00:00Z", until: "now")
-get_recent_changes(resource: "payments-api", since: "1h")
-```
-
-Returns: ordered list of changes with actor, source (Terraform / console / pipeline), and affected resources.
-
-### `get_dependents`
-
-Reverse-edge lookup: what depends on this resource?
-
-```
-get_dependents(resource: "prod-db", transitive: true)
-```
-
-Returns: direct dependents by default; pass `transitive: true` for the full downstream tree.
-
-### `get_blast_radius`
-
-Impact analysis: if this resource changes or fails, what breaks? Conceptually `get_dependents(transitive: true)` filtered to "would experience user-visible impact". Use before a risky deploy or to scope an incident.
-
-```
-get_blast_radius(resource: "prod-db", change_type: "delete")
-get_blast_radius(resource: "iam-role-deploy", change_type: "modify")
-```
-
-Returns: scored list of impacted resources, with a brief reason per resource.
-
-### `get_temporal_diff`
-
-State of the graph at point A vs point B. Use when the user wants to know what *specifically* changed between two times.
-
-```
-get_temporal_diff(at_a: "2026-05-19T08:00:00Z", at_b: "now", scope: {env: "prod"})
-```
-
-Returns: added / removed / modified resources, with the change source.
+The Annie CLI is not the call path for agents.
 
 ## Instructions
 
 When invoked, the agent should:
 
-### 1. Run preflight
+### 1. Verify the MCP server is reachable
 
-Verify `annie auth status` and `annie mcp ping`. If either fails, surface the failure mode (see below) and stop.
+If the harness lists the `anyshift` server in `tools/list`, you're good. If not, surface the failure mode (see below) and stop.
 
 ### 2. Pick the right tool for the question
 
-Map the user's question to the smallest tool above. Don't call `get_blast_radius` when `get_dependents` answers the question. Don't call `get_temporal_diff` when the user asked "what changed in the last hour" (use `get_recent_changes`).
+Map the user's question to the smallest tool. Don't call `inspect_resource_details` for thousands of IDs when `search_resources_by_term` with a filter is cheaper. Don't call `audit_resource_timeline` for a window-wide question (use `track_infrastructure_changes`).
 
-### 3. Make the call
-
-Either via the CLI (`annie mcp call <tool> --arg ...`) or via the MCP transport configured in the agent harness. See [`reference.md`](./reference.md) for both forms.
-
-### 4. Read the result, then narrow
+### 3. Chain tools
 
 The first call is almost always a starting point, not the answer. Expect to follow up:
 
-- `get_resource_graph` → `get_dependents` on a specific node.
-- `get_recent_changes` → `get_blast_radius` on a suspicious change.
-- `get_temporal_diff` → `get_recent_changes` to find *who* made each change.
+- `catalog_resource_types` → `search_resources_by_term` filtered to the right type.
+- `search_resources_by_term` → `inspect_resource_details` on the matched `hashed_id`s for full properties + relationships.
+- `track_infrastructure_changes` → `audit_resource_timeline` to drill into a specific changed resource.
 
-### 5. Cite resources by their stable ID
+### 4. Cite resources by their `hashed_id`
 
-When reporting findings to the user, quote the resource's stable ID (the one Annie returns), not just its friendly name. Two resources can share a friendly name across environments.
+When reporting findings to the user, quote the resource's `hashed_id`, not just its friendly name. Two resources can share a friendly name across environments; the `hashed_id` disambiguates.
 
-### 6. Stop at read-only
+### 5. Stop at read
 
-This skill never mutates infra. The 5 tools listed are read-only by design. If the user asks the agent to *apply* a change, hand back to a Terraform / change-management workflow. Do not invent write tools.
+The public surface is read-only by design. If the user asks the agent to _apply_ a change, hand back to Terraform / change-management. Do not invent write tools.
 
 ## Worked examples
 
 See [`examples.md`](./examples.md) for two end-to-end flows:
 
-1. **Investigate the impact of a recent deploy** (`get_recent_changes` → `get_blast_radius`).
-2. **Diff infra state between two points in time** (`get_temporal_diff` → `get_recent_changes`).
+1. **Investigate the impact of a recent deploy** (`track_infrastructure_changes` → `search_resources_by_term` → `inspect_resource_details`).
+2. **Walk the timeline of a specific resource** (`search_resources_by_term` → `audit_resource_timeline`).
 
 ## Failure modes
 
-This skill is wrong, or should escalate to a human, in the following cases.
+### MCP server not configured
 
-### Annie CLI not installed
+The harness has no `anyshift` server in `tools/list`. Tell the user to register the hosted MCP endpoint in their harness config; see [`reference.md`](./reference.md). Do not fall back to scraping the cloud console.
 
-`annie` not on PATH. Run the install snippet from [`reference.md`](./reference.md) and re-check. If install fails, the user is offline or behind a proxy: ask them to install manually and resume.
+### Auth not configured or expired
 
-### Auth not configured
-
-`annie auth status` returns "not authenticated". The user has not set up an API key (or the key has expired). Do NOT prompt the user for their API key in chat. Tell them to run `annie auth login` (or set `ANYSHIFT_API_KEY` per their org's secret-management policy) and resume.
-
-### MCP endpoint unreachable
-
-`annie mcp ping` fails. Either the MCP server is down, the network is blocked, or the endpoint URL is wrong. Surface the raw error and stop. Do not fall back to scraping the cloud console.
+A tool call returns 401 / "unauthorized". The access token is missing or expired. Do not prompt for an API key in chat. Tell the user to refresh the token (`annie auth login` if using the CLI's stored Supabase tokens, or rotate the bearer token in the harness config).
 
 ### User lacks permission for a resource
 
-A tool call returns "forbidden" or "not visible to your account". The user's API key is scoped tighter than the resource. Report which resource was forbidden, name the permission level needed (read on `<resource-type>` in `<env>`), and stop. Don't retry against other resources hoping for a hit.
+A tool call returns "forbidden" or "not visible to your project". The user's access is scoped tighter than the resource. Report which resource was forbidden and stop. Do not retry against other resources hoping for a hit.
 
 ### Graph is stale
 
-`get_resource_graph` returns a `last_synced_at` older than the user-relevant window (e.g. user is asking about a deploy from 10 minutes ago, graph is 6 hours stale). Surface the staleness, then try `get_recent_changes` for the missing window. If the change isn't there either, the answer is "Annie hasn't seen this yet, check the source of truth directly" (Terraform plan, cloud console).
+A search returns nothing for something you know exists. Possible causes: the indexer hasn't caught up (the change is recent), or the resource is in a universe the user's account doesn't see. Surface the staleness, then try `track_infrastructure_changes` over the missing window. If it isn't there either, the answer is "the graph hasn't seen this yet, check Terraform plan / cloud console directly".
 
-### Conflicting answers across tools
+### Tool listed but not actually callable
 
-`get_dependents` says X depends on Y, but `get_blast_radius` doesn't list Y when X is changed. This usually means the dependency is structural (CloudFormation parent / child) but not impact-bearing (no user traffic flows through it). Note both, do not silently pick one.
+The harness sometimes lists tools the hosted server doesn't currently expose. If a call errors with "unknown tool", fall back to the 5 documented above. Do not invent variations on the tool name.
 
-### Tool the agent expected isn't there
+### A write-capable tool appears
 
-Anthropic / Claude tooling sometimes lists tools the MCP server doesn't expose (e.g. a write-capable tool from an older version). If the listed tool is not in the 5 above, do not call it. Tell the user the surface is limited to read-only and continue.
+Some MCP execution modes expose internal write tools (cheatsheet editing, report saving, ACE flows). They require an Anyshift-internal API key and are not part of this skill's public surface. If you see one, do not call it. Tell the user the public surface is read-only and continue.
 
 ## Anti-patterns
 
-- **Calling `get_resource_graph` with no filter on a large estate.** Returns thousands of nodes. Always filter by name, type, or env.
-- **Using `get_temporal_diff` for "what changed in the last 5 minutes".** Use `get_recent_changes`; it's cheaper and ordered by event time.
-- **Treating "no dependents" as "safe to delete".** Annie sees what it sees. A resource might be referenced from outside the graph (e.g. a hand-rolled script, a customer-facing URL). Escalate before deletion.
-- **Reciting tool output verbatim.** Synthesize. The user wants the answer, not the JSON.
+- **Calling `search_resources_by_term` with no filter on a large estate.** Returns thousands of nodes. Always pass a `search_term`, `resourceType`, or `universe`.
+- **Calling `audit_resource_timeline` for "what changed in the last 5 minutes" across everything.** Use `track_infrastructure_changes`; it's window-scoped.
+- **Treating "no relationships" as "safe to delete".** The graph sees what it sees. A resource might be referenced from outside the graph (a hand-rolled script, a customer-facing URL). Escalate before deletion.
+- **Reciting tool output verbatim.** Synthesize. The user wants the answer, not the JSON payload.
+- **Calling tools through the `annie` CLI.** The CLI doesn't tunnel MCP. Use the harness's MCP transport.
 
 ## Reference
 
-For install, auth, MCP transport configuration, and exact CLI flags, see [`reference.md`](./reference.md).
+For install, auth, MCP transport configuration, the actual tool input schemas, and the Annie CLI surface for human users, see [`reference.md`](./reference.md).
