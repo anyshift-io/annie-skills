@@ -1,21 +1,24 @@
 # Annie skill: worked examples
 
-Two end-to-end flows showing the Annie skill in motion. Both assume Annie CLI is installed and authenticated (see [`reference.md`](./reference.md)).
+Two end-to-end flows showing the Annie skill in motion. Both assume the agent has the `anyshift` MCP server registered and reachable (see [`reference.md`](./reference.md)).
+
+Tool calls are written as JSON arg objects since they are invoked through the MCP transport, not the CLI. Responses below are abridged.
 
 ---
 
 ## Example 1: investigate the impact of a recent deploy
 
-**Scenario.** The user pings the agent: *"We just shipped `payments-api` 30 minutes ago. Latency on `checkout-service` jumped at the same time. Is the deploy responsible?"*
+**Scenario.** The user pings the agent: _"We just shipped `payments-api` 30 minutes ago. Latency on `checkout-service` jumped at the same time. Is the deploy responsible?"_
 
-**Expected flow:** `get_recent_changes` (find the deploy) → `get_blast_radius` (does it touch `checkout-service`?) → answer with stable IDs.
+**Expected flow:** `track_infrastructure_changes` (find the deploy) → `search_resources_by_term` (locate the changed resource + its relationships) → `inspect_resource_details` (full picture of the suspected dependents) → answer with `hashed_id`s.
 
 ### Step 1: scope the deploy
 
-```bash
-annie mcp call get_recent_changes \
-  --since "30m" \
-  --resource "payments-api"
+```
+track_infrastructure_changes({
+  start: "30m",
+  end: "now"
+})
 ```
 
 Result (abridged):
@@ -28,7 +31,7 @@ Result (abridged):
       "at": "2026-05-19T11:02:18Z",
       "actor": "ci-bot",
       "source": "github-actions:payments-api/.github/workflows/deploy.yml",
-      "resource_id": "svc_payments-api_prod",
+      "hashed_id": "h_svc_payments-api_prod_4a7c",
       "kind": "deploy",
       "summary": "v3.41.2 → v3.41.3"
     }
@@ -36,95 +39,84 @@ Result (abridged):
 }
 ```
 
-One deploy in the window. Take the `resource_id` forward.
+One deploy in the window. Take the `hashed_id` forward.
 
-### Step 2: get the blast radius
+### Step 2: pull the resource and its relationships
 
-```bash
-annie mcp call get_blast_radius \
-  --resource "svc_payments-api_prod" \
-  --change_type "modify"
+```
+search_resources_by_term({
+  search_term: "payments-api",
+  universe: "CLOUD"
+})
 ```
 
-Result (abridged):
+Result (abridged): the matching service resource (`hashed_id: h_svc_payments-api_prod_4a7c`) with its outbound relationships pointing to dependents, including `h_svc_checkout-service_prod_8d12`.
 
-```json
-{
-  "impacted": [
-    {"resource_id": "svc_checkout-service_prod", "reason": "calls payments-api on hot path", "score": 0.92},
-    {"resource_id": "svc_order-confirmation_prod", "reason": "async via SQS, replayable", "score": 0.41},
-    {"resource_id": "dashboard_revenue_grafana", "reason": "reads from payments-api metrics", "score": 0.18}
-  ]
-}
+### Step 3: inspect the suspected dependent in full
+
+```
+inspect_resource_details({
+  hashed_ids: ["h_svc_checkout-service_prod_8d12"],
+  timestamp: "now"
+})
 ```
 
-`checkout-service` is the top-scored impacted resource. The deploy *can* be responsible.
+Returns `checkout-service` with its full properties (image tag, replica count, traffic source) and the explicit relationship pointing back to `payments-api` on the request hot path.
 
-### Step 3: report to the user
+### Step 4: report to the user
 
-> The `payments-api` deploy at 11:02 UTC (`chg_01H...`, v3.41.2 → v3.41.3) is the only change in the window. `checkout-service` is the top impacted dependent (score 0.92, hot-path call). The correlation is consistent with the deploy being responsible. Roll back as the cheapest test: `annie` cannot confirm causation, only adjacency.
+> The `payments-api` deploy at 11:02 UTC (`chg_01H...`, v3.41.2 → v3.41.3, `h_svc_payments-api_prod_4a7c`) is the only change in the window. `checkout-service` (`h_svc_checkout-service_prod_8d12`) declares a hot-path call to `payments-api`. The deploy is on the dependency path of the affected service. Roll back as the cheapest test: Annie sees the graph, not the runtime metric, so it cannot confirm causation, only adjacency.
 
 ### What the agent did right
 
-- Filtered `get_recent_changes` by `resource` and a short window, not the whole estate.
-- Took the stable `resource_id` from step 1 into step 2, instead of re-querying by friendly name.
-- Reported adjacency, not causation. Annie sees the graph, not the runtime metric.
+- Started window-scoped, then drilled into the one suspected resource. No "snapshot the whole estate" call.
+- Carried `hashed_id` through every step instead of re-resolving by friendly name.
+- Did not invent a `get_blast_radius` call. Assembled the impact picture from `search_resources_by_term` + `inspect_resource_details` payloads, which is what the surface actually provides.
+- Reported adjacency, not causation.
 
 ---
 
-## Example 2: diff infra state between two points in time
+## Example 2: walk the timeline of a specific resource
 
-**Scenario.** A teammate asks: *"Our `prod` VPC config looked different yesterday morning than it does now. What specifically changed, and who changed it?"*
+**Scenario.** A teammate asks: _"Our `prod` VPC config looked different yesterday morning than it does now. What specifically changed, and who changed it?"_
 
-**Expected flow:** `get_temporal_diff` (find the deltas) → `get_recent_changes` (attribute each delta to an actor).
+**Expected flow:** `search_resources_by_term` (find the VPC's `hashed_id`) → `audit_resource_timeline` (full change history for that resource) → attribute each delta to an actor.
 
-### Step 1: get the diff
+### Step 1: find the VPC's hashed_id
 
-```bash
-annie mcp call get_temporal_diff \
-  --at_a "2026-05-18T08:00:00Z" \
-  --at_b "now" \
-  --scope '{"env": "prod", "type": "aws_vpc"}'
+```
+search_resources_by_term({
+  search_term: "prod",
+  resourceType: "AWS_VPC"
+})
+```
+
+Result (abridged): one match, `vpc_prod_main`, `hashed_id: h_vpc_prod_main_1f3e`.
+
+### Step 2: pull its timeline over the window
+
+```
+audit_resource_timeline({
+  hashed_id: "h_vpc_prod_main_1f3e",
+  start: "2026-05-18T08:00:00Z",
+  end: "now"
+})
 ```
 
 Result (abridged):
 
 ```json
 {
-  "added": [],
-  "removed": [],
-  "modified": [
-    {
-      "resource_id": "vpc_prod_main",
-      "fields": ["enable_dns_hostnames", "tags.Owner"]
-    }
-  ]
-}
-```
-
-One resource changed, two fields.
-
-### Step 2: attribute the changes
-
-```bash
-annie mcp call get_recent_changes \
-  --resource "vpc_prod_main" \
-  --since "2026-05-18T08:00:00Z" \
-  --until "now"
-```
-
-Result (abridged):
-
-```json
-{
-  "changes": [
+  "events": [
     {
       "id": "chg_01H...A",
       "at": "2026-05-18T14:27:11Z",
       "actor": "louis.fradin@anyshift.io",
       "source": "terraform-cloud:run/run-xyz",
       "kind": "tf-apply",
-      "summary": "enable_dns_hostnames: false → true"
+      "field": "enable_dns_hostnames",
+      "from": false,
+      "to": true
     },
     {
       "id": "chg_01H...B",
@@ -132,20 +124,22 @@ Result (abridged):
       "actor": "stephane.jourdan@anyshift.io",
       "source": "aws-console",
       "kind": "manual",
-      "summary": "tags.Owner: 'platform' → 'sre'"
+      "field": "tags.Owner",
+      "from": "platform",
+      "to": "sre"
     }
   ]
 }
 ```
 
-Two changes, both yesterday afternoon, by two different actors via two different paths (Terraform vs console).
+Two events, two fields, two different actors, two different paths (Terraform vs console).
 
 ### Step 3: report to the user
 
-> Between 2026-05-18 08:00 UTC and now, `vpc_prod_main` was modified twice on two fields. Field `enable_dns_hostnames` was flipped false → true by louis.fradin via Terraform Cloud at 14:27 UTC (`chg_01H...A`). Tag `Owner` was changed `platform` → `sre` by stephane.jourdan via the AWS console at 15:02 UTC (`chg_01H...B`). The console edit drifts from Terraform: flag for the next plan-and-apply cycle.
+> Between 2026-05-18 08:00 UTC and now, `vpc_prod_main` (`h_vpc_prod_main_1f3e`) was modified twice. Field `enable_dns_hostnames` flipped false → true via Terraform Cloud at 14:27 UTC by louis.fradin (`chg_01H...A`). Tag `Owner` was changed `platform` → `sre` via the AWS console at 15:02 UTC by stephane.jourdan (`chg_01H...B`). The console edit drifts from Terraform: flag for the next plan-and-apply cycle.
 
 ### What the agent did right
 
-- Scoped `get_temporal_diff` to a single resource type and env, not the whole graph.
-- Followed up with `get_recent_changes` filtered to the modified resource, instead of paging the whole window.
+- Used `audit_resource_timeline` scoped to one `hashed_id`, not `track_infrastructure_changes` over the whole estate.
 - Surfaced the Terraform-vs-console split as the actually-interesting finding, not just the field values.
+- Cited the `hashed_id` alongside the friendly name so the reader can re-pull the resource later.
