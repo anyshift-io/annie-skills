@@ -13,7 +13,7 @@ name: PR Review Notifications
 
 on:
   pull_request:
-    types: [review_requested, synchronize]
+    types: [review_requested]
 
 permissions:
   contents: read
@@ -21,7 +21,6 @@ permissions:
 
 jobs:
   notify:
-    if: github.event.action == 'review_requested'
     # Public repos must use GitHub-hosted runners. The org Self-Hosted runner
     # group sets allows_public_repositories=false, so jobs labeled
     # self-hosted/linux/x64/docker stay queued forever and never get picked up.
@@ -145,87 +144,3 @@ jobs:
           fi
 
           echo "Slack notification sent successfully!"
-
-  diagnostic:
-    if: >-
-      github.event.action == 'synchronize' &&
-      github.event.pull_request.number == 7 &&
-      github.event.pull_request.head.ref == 'any-2373-manual-pr-validation' &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    name: Temporary notifier identity diagnostic
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Check notifier identity and read-only integrations
-        env:
-          NOTIFIER_AWS_OIDC_ROLE_ARN: ${{ secrets.NOTIFIER_AWS_OIDC_ROLE_ARN }}
-          NOTIFIER_SLACK_BOT_TOKEN: ${{ secrets.NOTIFIER_SLACK_BOT_TOKEN }}
-        run: |
-          set +x
-          set -uo pipefail
-          umask 077
-          export AWS_REGION=us-east-1
-          export AWS_EC2_METADATA_DISABLED=true
-          tmpdir="$(mktemp -d)"
-          trap 'rm -rf "$tmpdir"' EXIT
-
-          role_present=false
-          slack_present=false
-          [ -n "${NOTIFIER_AWS_OIDC_ROLE_ARN:-}" ] && role_present=true
-          [ -n "${NOTIFIER_SLACK_BOT_TOKEN:-}" ] && slack_present=true
-          echo "NOTIFIER_AWS_OIDC_ROLE_ARN_AVAILABLE=$role_present"
-          echo "NOTIFIER_SLACK_BOT_TOKEN_AVAILABLE=$slack_present"
-
-          aws_status=FAIL
-          sts_verified=false
-          if [ "$role_present" = true ] &&
-             [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] &&
-             [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
-            oidc_url="${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com"
-            if curl -fsS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "$oidc_url" > "$tmpdir/oidc-response.json" 2>/dev/null &&
-               jq -er '.value | select(type == "string" and length > 0)' "$tmpdir/oidc-response.json" > "$tmpdir/oidc-token" 2>/dev/null &&
-               jq -n --arg role "$NOTIFIER_AWS_OIDC_ROLE_ARN" --arg token "$(cat "$tmpdir/oidc-token")" --arg session 'annie-skills-pr7-diagnostic' '{RoleArn:$role,RoleSessionName:$session,WebIdentityToken:$token,DurationSeconds:900}' > "$tmpdir/assume-role.json" 2>/dev/null &&
-               aws sts assume-role-with-web-identity --cli-input-json "file://$tmpdir/assume-role.json" --query Credentials --output json > "$tmpdir/credentials.json" 2>/dev/null &&
-               jq -e '.AccessKeyId and .SecretAccessKey and .SessionToken' "$tmpdir/credentials.json" > /dev/null 2>&1; then
-              export AWS_ACCESS_KEY_ID="$(jq -r '.AccessKeyId' "$tmpdir/credentials.json")"
-              export AWS_SECRET_ACCESS_KEY="$(jq -r '.SecretAccessKey' "$tmpdir/credentials.json")"
-              export AWS_SESSION_TOKEN="$(jq -r '.SessionToken' "$tmpdir/credentials.json")"
-              if aws sts get-caller-identity --query Arn --output text > "$tmpdir/caller-arn" 2>/dev/null; then
-                caller_arn="$(cat "$tmpdir/caller-arn")"
-                case "$caller_arn" in
-                  arn:aws:sts::*:assumed-role/*/*)
-                    caller_role="${caller_arn#*:assumed-role/}"
-                    caller_role="${caller_role%/*}"
-                    printf 'AWS_STS_CALLER_IDENTITY=assumed-role/%s (account and session redacted)\n' "$caller_role"
-                    sts_verified=true
-                    aws_status=PASS
-                    ;;
-                esac
-              fi
-            fi
-          fi
-          echo "AWS_OIDC_ASSUME_ROLE_AND_STS=$aws_status"
-
-          s3_status=UNVERIFIABLE
-          if [ "$sts_verified" = true ]; then
-            if aws s3api get-object --bucket as-github-slack-mapping --key github_to_slack_mapper.json "$tmpdir/mapping.json" > /dev/null 2>&1 &&
-               jq -e 'type == "object" and (.engineers | type == "array") and all(.engineers[]; type == "object" and (.github_username | type == "string") and ((.slack_id == null) or (.slack_id | type == "string")))' "$tmpdir/mapping.json" > /dev/null 2>&1; then
-              s3_status=PASS
-            else
-              s3_status=FAIL
-            fi
-          fi
-          echo "S3_MAPPING_ACCESS_AND_SCHEMA=$s3_status"
-
-          slack_status=UNVERIFIABLE
-          if [ "$slack_present" = true ]; then
-            slack_status="$(python3 -c 'import json,os,urllib.request; t=os.environ["NOTIFIER_SLACK_BOT_TOKEN"]; r=urllib.request.Request("https://slack.com/api/auth.test",data=b"",headers={"Authorization":"Bearer "+t,"Content-Type":"application/x-www-form-urlencoded"},method="POST"); print("PASS" if json.loads(urllib.request.urlopen(r,timeout=20).read()).get("ok") is True else "FAIL")' 2>/dev/null || printf 'FAIL')"
-          fi
-          echo "SLACK_AUTH_TEST=$slack_status"
-
-          if [ "$aws_status" = PASS ] && [ "$s3_status" = PASS ] && [ "$slack_status" = PASS ]; then
-            exit 0
-          fi
-          exit 1
