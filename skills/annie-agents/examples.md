@@ -9,7 +9,7 @@ annie agent list                 # no deploy follow-up for payments-api yet
 annie agent build "After each prod deploy of payments-api, watch error rate and latency for 30 minutes and post in #payments if either regressed vs the previous hour"
 ```
 
-Output (abridged): a summary of the draft plus `Review and accept: https://app.anyshift.io/agents/drafts/...`. Give the user that link as printed and say: nothing is live until you accept it. If the output has a warning `Connect it: <url>` (for example Slack not connected), relay it word for word.
+Output (abridged): a summary of the draft plus `Review and accept: https://app.anyshift.io/agentic-squads/new?draft=<id>`. Give the user that link as printed and say: nothing is live until you accept it. If the output has a warning `Connect it: <url>` (for example Slack not connected), relay it word for word.
 
 ## Example 2: one-off check after a merge (MCP)
 
