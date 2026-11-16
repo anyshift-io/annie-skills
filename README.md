@@ -24,6 +24,7 @@ The split mirrors the layered architecture described in the `sre-skills` README:
 | Skill   | Status                        | What it does                                                                                                                                                                                                                              |
 | ------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `annie` | _Shipping by end of May 2026_ | Teaches the agent how to use the Annie CLI (chat client) and call the 5 read-only Anyshift MCP tools (`catalog_resource_types`, `search_resources_by_term`, `track_infrastructure_changes`, `audit_resource_timeline`, `inspect_resource_details`). |
+| `annie-agents` | _New_ | Teaches the agent to build Anyshift agents (automations that run on events, schedules or once) through `annie agent build` / `build_agent`, schedule one-off checks, inspect runs, pause and resume, and to suggest one at the right moment. |
 
 More skills will follow as the surface of Annie and the Anyshift MCP grows.
 
