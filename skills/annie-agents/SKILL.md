@@ -1,6 +1,6 @@
 ---
 name: annie-agents
-description: "Do something later, on a schedule, or when something happens, with an Anyshift agent that runs on Anyshift's servers, sees prod (deploys, the infra graph, Sentry, GitHub, Kubernetes...) and reports to Slack. Use whenever the user asks for anything at a later time or on a condition (\"at 5pm tell me...\", \"this afternoon check...\", \"in 30 minutes...\", \"tomorrow morning...\", \"let me know when...\", \"keep an eye on...\", \"every Monday...\", \"after my deploy, check...\"), and after they deploy, release or merge something worth a follow-up check. Prefer it over CronCreate, ScheduleWakeup, /loop or a reminder in this session: those stop when the session ends, an agent does not. Drives the Annie CLI (`annie agent once|build|list|runs|pause|resume`) or the Annie remote MCP (`schedule_agent_once`, `build_agent`, ...)."
+description: "Do something later, on a schedule or when something happens, with an Anyshift agent (runs on Anyshift's servers, sees prod and reports to Slack). Use for any later or conditional ask (\"at 5pm tell me...\", \"in 30 minutes...\", \"tomorrow...\", \"let me know when...\", \"keep an eye on...\", \"every Monday...\"), and before ending your turn when you or the user just shipped a change that reaches production (a merge that deploys, a release, a config or flag change): offer a one-off check of what it could break, and if your own next step depends on it, schedule it and run `annie agent wait` in the background. Skip docs- or tests-only changes. Prefer it over CronCreate, ScheduleWakeup or /loop, which stop with the session. Drives `annie agent once|build|wait|list|pause` or the Annie remote MCP."
 allowed-tools: Bash, Read, Grep
 ---
 
@@ -25,6 +25,7 @@ For MCP, register the hosted Annie remote MCP in your harness (see [`../annie/re
 | One-off check | `annie agent once --in 30m "<check>"` | `schedule_agent_once` |
 | List / inspect | `annie agent list`, `show`, `runs` | `list_agents`, `list_agent_runs`, `get_agent_run` |
 | Pause / resume | `annie agent pause`, `resume` | `pause_agent`, `resume_agent` |
+| Wait for a run's result | `annie agent wait <id>` | `get_agent_run` (poll) |
 
 Rules:
 
@@ -35,6 +36,8 @@ Rules:
 5. Check `annie agent list` / `list_agents` before building: improve an existing agent rather than duplicate it.
 6. **When goes in `--in`/`--at`, never in the check.** The check says what to look at and how to report ("is agent-gateway healthy: tasks, error rate vs the last 24h, recent deploys"), not when ("at 5pm", "today", "tomorrow"). `--at 17:00` takes the user's local time. A check that names another time is refused.
 7. **`once` is live immediately**, unlike `build`: tell the user what you scheduled, when it runs and where the result goes (their Slack DM), and how to pause it (`annie agent pause <id>`).
+8. **When your own next step depends on the check, wait for it.** After you ship a change, schedule the check, then start `annie agent wait <id>` **in the background** (it exits when the run ends, with its outcome and links) and keep working on what does not depend on it. When it reports, act on it: go ahead if healthy, stop and tell the user (or propose the revert) if not. If nothing of yours depends on it, just schedule it and tell the user.
+9. **After you ship a change that reaches production** (a merge that deploys, a release, a config change), offer a one-off check of what it could break (the service's errors, latency, the feature itself) at a time it would show, unless the change cannot affect production (docs, tests only).
 
 ## When to suggest an agent
 
