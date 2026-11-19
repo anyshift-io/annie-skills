@@ -1,6 +1,6 @@
 ---
 name: annie
-description: Use the Anyshift MCP server (and the Annie CLI as the user-facing chat client) to investigate infrastructure: discover resource types, search the graph, track changes, audit a single resource's timeline, and inspect resources in detail. Use when the user asks about a resource, a deploy, an impact analysis, or wants to compare infra state across time. Keywords: annie, anyshift, mcp, infrastructure, resource graph, change tracking, audit timeline, temporal diff.
+description: "Use the Anyshift MCP server (and the Annie CLI as the user-facing chat client) to investigate infrastructure: discover resource types, search the graph, track changes, audit a single resource's timeline, and inspect resources in detail. Use when the user asks about a resource, a deploy, an impact analysis, or wants to compare infra state across time. Keywords: annie, anyshift, mcp, infrastructure, resource graph, change tracking, audit timeline, temporal diff."
 allowed-tools: Bash, Read, Grep
 ---
 
