@@ -68,6 +68,9 @@ The CLI is a chat client, not an MCP tunnel. Running `annie` with no arguments l
 | `annie project {list,current,switch}`              | Manage the active project (multi-tenant scoping)                                           |
 | `annie rca {list,get <id>}`                        | Browse past Root Cause Analyses                                                            |
 | `annie report {list,get,generate,status,feedback}` | Browse / trigger reports, vote on proactive findings                                       |
+| `annie agent build "<what you want>"`              | Talk to the agent builder; prints the draft link to review                                 |
+| `annie agent once --in 30m "<check>"`              | Create a one-off scheduled check                                                           |
+| `annie agent {list,runs,show,pause,resume}`        | Inspect agents and their runs; pause or resume one                                         |
 | `annie feedback {up,down}`                         | Rate the last answer                                                                       |
 | `annie feedback hypothesis {up,down}`              | Rate a specific RCA hypothesis                                                             |
 
