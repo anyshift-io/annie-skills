@@ -22,7 +22,7 @@ For MCP, this plugin registers the hosted Annie remote MCP (`anyshift`, `https:/
 | Goal | CLI | MCP |
 | --- | --- | --- |
 | Build an agent | `annie agent build "<what you want>"` | `build_agent`, then `get_annie_response` |
-| One-off check | `annie agent once --in 30m "<check>"` | `schedule_agent_once` |
+| One-off check | `annie agent once --in 30m --name "<2-6 word title>" "<check>"` | `schedule_agent_once` with `name` |
 | List / inspect | `annie agent list`, `show`, `runs` | `list_agents`, `list_agent_runs`, `get_agent_run` |
 | Pause / resume | `annie agent pause`, `resume` | `pause_agent`, `resume_agent` |
 | Wait for a run's result | `annie agent wait <id>` | `get_agent_run` (poll) |
