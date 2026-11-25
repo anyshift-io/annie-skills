@@ -15,7 +15,7 @@ curl -fsSL https://install.anyshift.io/annie | sh   # CLI
 annie auth login && annie auth status
 ```
 
-For MCP, register the hosted Annie remote MCP in your harness (see [`../annie/reference.md`](../annie/reference.md)). Tools: `build_agent`, `schedule_agent_once`, `list_agents`, `list_agent_runs`, `get_agent_run`, `pause_agent`, `resume_agent`; poll `build_agent`'s answer with `get_annie_response`, which returns the drafts' links.
+For MCP, this plugin registers the hosted Annie remote MCP (`anyshift`, `https://api.anyshift.io/mcp/remote`); the first call opens a browser sign-in that binds it to one project. In another harness, register that URL yourself. Tools: `build_agent`, `schedule_agent_once`, `list_agents`, `list_agent_runs`, `get_agent_run`, `pause_agent`, `resume_agent`; poll `build_agent`'s answer with `get_annie_response`, which returns the drafts' links.
 
 ## How
 
