@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "annie-skills",
+  "description": "Drive Annie from your coding agent: the Annie CLI and Anyshift MCP, and Anyshift agents that check later or when something happens.",
+  "homepage": "https://github.com/anyshift-io/annie-skills",
+  "repository": "https://github.com/anyshift-io/annie-skills",
+  "license": "Apache-2.0",
+  "keywords": ["annie", "anyshift", "sre", "mcp", "agents"]
+}
